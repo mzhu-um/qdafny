@@ -425,7 +425,19 @@ namespace Microsoft.Dafny {
           return s;
 
         } else if (expr is MemberSelectExpr) {
+          // DBG
           var e = (MemberSelectExpr)expr;
+          // var qflag = false;
+          // if (Printer.ExprToString(e.Obj) == "p" && e.MemberName == "card") {
+          //   MemberSelectExpr ee = (MemberSelectExpr) expr;
+          //   Console.WriteLine("[TR] MemberSelectExpr: {0}, {1}, {2}, {3}",
+          //                     GetToken(e).val,
+          //                     Printer.ExprToString(e.Obj),
+          //                     e.MemberName,
+          //                     e.Member);
+          //   qflag = true;
+          // }
+
           return e.MemberSelectCase(
             field => {
               var useSurrogateLocal = translator.inBodyInitContext && Expression.AsThis(e.Obj) != null && !field.IsInstanceIndependentConstant;
@@ -730,6 +742,12 @@ namespace Microsoft.Dafny {
                 return translator.FunctionCall(GetToken(expr), BuiltinFunction.MultiSetCard, null, arg);
               } else if (eType is MapType && ((MapType)eType).Finite) {
                 return translator.FunctionCall(GetToken(expr), BuiltinFunction.MapCard, null, arg);
+              } else if (eType.IsQubitsType) {
+                // Translate Cardinality Expression on Set to the [card] member of Qubits
+                var tok = Token.NoToken;
+                tok.val = "card";
+                var sExpr = new MemberSelectExpr(tok, e.E, "card");
+                return TrExpr(sExpr);
               } else {
                 Contract.Assert(false); throw new cce.UnreachableException();  // unexpected sized type
               }

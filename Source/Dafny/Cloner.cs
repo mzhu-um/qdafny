@@ -470,6 +470,19 @@ namespace Microsoft.Dafny {
         var e = (NegationExpression)expr;
         return new NegationExpression(Tok(e.tok), CloneExpr(e.E));
 
+      } else if (expr is QJudgementExpression) {
+        var e = (QJudgementExpression)expr;
+        // trick: discharge [QJudgementExpression] from the translation stage if it's ready
+        var resolved = ((QJudgementExpression)expr).ResolvedExpression;
+        if (resolved != null) {
+          return CloneExpr(resolved);
+        } else {
+          var qs = new List<IToken>();
+          foreach(var q in e.Qs) {
+            qs.Add(Tok(q));
+          }
+          return new QJudgementExpression(Tok(e.tok), qs, CloneExpr(e.En), Tok(e.Kind), CloneExpr(e.Ebody), CloneExpr(e.Edof), Tok(e.IsStrict));
+        }
       } else {
         Contract.Assert(false); throw new cce.UnreachableException();  // unexpected expression
       }
@@ -1066,6 +1079,8 @@ namespace Microsoft.Dafny {
       var me = expr as MatchExpr;
       if (me != null && me.OrigUnresolved != null) {
         return CloneExpr(me.OrigUnresolved);
+      }
+      if (expr is QJudgementExpression) {
       }
       return base.CloneExpr(expr);
     }

@@ -65,6 +65,7 @@ namespace Microsoft.Dafny {
     public bool TypeInferenceDebug = false;
     public bool MatchCompilerDebug = false;
     public string DafnyPrelude = null;
+    public string QPrelude = null;
     public string DafnyPrintFile = null;
 
     public enum PrintModes {
@@ -175,6 +176,13 @@ namespace Microsoft.Dafny {
         case "dprelude":
           if (ps.ConfirmArgumentCount(1)) {
             DafnyPrelude = args[ps.i];
+          }
+
+          return true;
+
+        case "dqprelude":
+          if (ps.ConfirmArgumentCount(1)) {
+            QPrelude = args[ps.i];
           }
 
           return true;
@@ -617,6 +625,7 @@ namespace Microsoft.Dafny {
 
       // expand macros in filenames, now that LogPrefix is fully determined
       ExpandFilename(DafnyPrelude, x => DafnyPrelude = x, LogPrefix, FileTimestamp);
+      ExpandFilename(QPrelude, x => QPrelude = x, LogPrefix, FileTimestamp);
       ExpandFilename(DafnyPrintFile, x => DafnyPrintFile = x, LogPrefix, FileTimestamp);
 
       SetZ3ExecutablePath();

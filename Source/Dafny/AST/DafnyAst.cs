@@ -7,8 +7,6 @@
 //
 //-----------------------------------------------------------------------------
 using System;
-using System.Collections;
-using System.Text;
 using System.Collections.Generic;
 using System.Diagnostics.Contracts;
 using System.Numerics;
@@ -18,6 +16,7 @@ using System.Diagnostics;
 using System.Threading;
 
 namespace Microsoft.Dafny {
+
   [System.AttributeUsage(System.AttributeTargets.Field)]
   public class FilledInDuringResolutionAttribute : System.Attribute { }
 
@@ -858,6 +857,12 @@ namespace Microsoft.Dafny {
     public bool IsRealType { get { return NormalizeExpand() is RealType; } }
     public bool IsBigOrdinalType { get { return NormalizeExpand() is BigOrdinalType; } }
     public bool IsBitVectorType { get { return AsBitVectorType != null; } }
+    public bool IsQubitsType {
+      get {
+        var norm = NormalizeExpand();
+        return (norm is UserDefinedType) && ((UserDefinedType) norm).Name == "Qubits?";
+      }
+    }
     public BitvectorType AsBitVectorType { get { return NormalizeExpand() as BitvectorType; } }
     public bool IsNumericBased() {
       var t = NormalizeExpand();
@@ -926,7 +931,7 @@ namespace Microsoft.Dafny {
         }
       }
 
-      if (t is BoolType || t is CharType || t is IntType || t is BigOrdinalType || t is RealType || t is BitvectorType) {
+      if (t is BoolType || t is QubitsType || t is CharType || t is IntType || t is BigOrdinalType || t is RealType || t is BitvectorType) {
         return AutoInitInfo.CompilableValue;
       } else if (t is CollectionType) {
         return AutoInitInfo.CompilableValue;
@@ -1612,6 +1617,8 @@ namespace Microsoft.Dafny {
         return super == sub;
       } else if (super is BoolType) {
         return sub is BoolType;
+      } else if (super is QubitsType) {
+        return sub is QubitsType;
       } else if (super is CharType) {
         return sub is CharType;
       } else if (super is IntType) {
@@ -1699,6 +1706,8 @@ namespace Microsoft.Dafny {
       b = b.NormalizeExpandKeepConstraints();  // expand type synonyms
       if (a is BoolType) {
         return b is BoolType;
+      } else if (a is QubitsType) {
+        return b is QubitsType;
       } else if (a is CharType) {
         return b is CharType;
       } else if (a is IntType) {
@@ -1905,7 +1914,7 @@ namespace Microsoft.Dafny {
         return b is IntVarietiesSupertype || b.IsNumericBased(NumericPersuasion.Int) || b.IsBigOrdinalType || b.IsBitVectorType ? b : null;
       } else if (b is IntVarietiesSupertype) {
         return a.IsNumericBased(NumericPersuasion.Int) || a.IsBigOrdinalType || a.IsBitVectorType ? a : null;
-      } else if (a.IsBoolType || a.IsCharType || a.IsBitVectorType || a.IsBigOrdinalType || a.IsTypeParameter || a.IsInternalTypeSynonym || a is TypeProxy) {
+      } else if (a.IsQubitsType || a.IsBoolType || a.IsCharType || a.IsBitVectorType || a.IsBigOrdinalType || a.IsTypeParameter || a.IsInternalTypeSynonym || a is TypeProxy) {
         return a.Equals(b) ? a : null;
       } else if (a is RealVarietiesSupertype) {
         return b is RealVarietiesSupertype || b.IsNumericBased(NumericPersuasion.Real) ? b : null;
@@ -2134,7 +2143,7 @@ namespace Microsoft.Dafny {
         return b is IntVarietiesSupertype || b.IsNumericBased(NumericPersuasion.Int) || b.IsBigOrdinalType || b.IsBitVectorType ? b : null;
       } else if (b is IntVarietiesSupertype) {
         return a.IsNumericBased(NumericPersuasion.Int) || a.IsBigOrdinalType || a.IsBitVectorType ? a : null;
-      } else if (a.IsBoolType || a.IsCharType || a.IsBigOrdinalType || a.IsTypeParameter || a.IsInternalTypeSynonym || a is TypeProxy) {
+      } else if (a.IsQubitsType || a.IsBoolType || a.IsCharType || a.IsBigOrdinalType || a.IsTypeParameter || a.IsInternalTypeSynonym || a is TypeProxy) {
         return a.Equals(b) ? a : null;
       } else if (a is RealVarietiesSupertype) {
         return b is RealVarietiesSupertype || b.IsNumericBased(NumericPersuasion.Real) ? b : null;
@@ -2367,6 +2376,17 @@ namespace Microsoft.Dafny {
       return false;
     }
   }
+
+  public class QubitsType : BasicType {
+    [Pure]
+    public override string TypeName(ModuleDefinition context, bool parseAble) {
+      return "qubits";
+    }
+    public override bool Equals(Type that, bool keepConstraints = false) {
+      return that.IsQubitsType;
+    }
+  }
+
 
   public class BoolType : BasicType {
     [Pure]
@@ -3223,7 +3243,7 @@ namespace Microsoft.Dafny {
       SubtypeConstraints.Add(c);
     }
 
-    public enum Family { Unknown, Bool, Char, IntLike, RealLike, Ordinal, BitVector, ValueType, Ref, Opaque }
+    public enum Family { Unknown, Bool, Qubits, Char, IntLike, RealLike, Ordinal, BitVector, ValueType, Ref, Opaque }
     public Family family = Family.Unknown;
     public static Family GetFamily(Type t) {
       Contract.Ensures(Contract.Result<Family>() != Family.Unknown || t is TypeProxy || t is Resolver_IdentifierExpr.ResolverType);  // return Unknown ==> t is TypeProxy || t is ResolverType
@@ -7109,6 +7129,16 @@ namespace Microsoft.Dafny {
         }
       }
     }
+
+    public void AddDefaultErrorMessage(string s) {
+      var tok = new Token();
+      tok.val = "error";
+      var args = new List<Expression>() { new StringLiteralExpr(tok, s, true) };
+      IToken openBrace = tok;
+      IToken closeBrace = new Token(tok.line, tok.col + 7 + s.Length + 1); // where 7 = length(":error ")
+      this.Attributes = new UserSuppliedAttributes(tok, openBrace, closeBrace, args, this.Attributes);
+    }
+
     public void AddCustomizedErrorMessage(IToken tok, string s) {
       var args = new List<Expression>() { new StringLiteralExpr(tok, s, true) };
       IToken openBrace = tok;
@@ -7635,6 +7665,7 @@ namespace Microsoft.Dafny {
   public class UpdateStmt : ConcreteUpdateStatement {
     public readonly List<AssignmentRhs> Rhss;
     public readonly bool CanMutateKnownState;
+    public readonly Expression QExpr;
     public Expression OriginalInitialLhs = null;
 
     [FilledInDuringResolution] public readonly List<Statement> ResolvedStatements = new List<Statement>();
@@ -7667,7 +7698,103 @@ namespace Microsoft.Dafny {
       Rhss = rhss;
       CanMutateKnownState = mutate;
     }
+
+    // QDafny Specialized Constructor
+    public UpdateStmt(IToken tok, IToken endTok, AssignmentRhs translated, Expression qExpr)
+      : base(tok, endTok, new List<Expression>()) {
+      Contract.Requires(tok != null);
+      Contract.Requires(endTok != null);
+      Contract.Requires(translated != null);
+      Rhss = new List<AssignmentRhs>() { translated };
+      CanMutateKnownState = false;
+      QExpr = qExpr;
+    }
+
+    public Statement SubstituteLHS(String name) {
+      Contract.Requires(QExpr != null);
+      Contract.Requires(Rhss != null && Rhss.Count == 1);
+      var tok = new Token(); tok.val = name;
+      var lhs = new NameSegment(tok, name, null);
+      var cloner = new QSubstCloner(QExpr.tok.val, name);
+      var oldRhs = Rhss[0];
+      var newRhs = oldRhs;
+      if (oldRhs is ExprRhs r) {
+        var exp = r.Expr;
+        /* Console.WriteLine("EXPRRHS"); */
+        newRhs = new ExprRhs(cloner.CloneExpr(r.Expr));
+      }
+      return QExpr == null ? null : new UpdateStmt(Tok, EndTok, newRhs, lhs);
+    }
   }
+
+  public class QUpdateStmt {
+    static private string clBinding = "_i_cl";
+    static public void TransformClassical(IToken x, Expression lhs, Expression lambda,
+                                          ref List<ActualBinding> args, out Expression er) {
+      var qrf = QRewriteFactory.qrf;
+      // cl (A complicated one)
+      // q *= cl (lam) ==>
+      // q.Calssical(seq<nat>(q.m.dof, i => lam(q.m.c[q][i])))
+
+      var larg = new List<ActualBinding>();
+      var q_m_dof = new ExprDotName(x, new ExprDotName(x, lhs, "m", null), "dof", null);
+      var q_m_c = new ExprDotName(x, new ExprDotName(x, lhs, "m", null), "c", null);
+      var q_m_c_q = new SeqSelectExpr(x, true, q_m_c, lhs, null);
+      var itok = qrf.freshVariable(QUpdateStmt.clBinding);
+      var iExpr = QJudgementExpression.TokToExpr(itok);
+      var q_m_c_q_i = new ExprDotName(
+        x, new SeqSelectExpr(x, true, q_m_c_q, iExpr, null),
+        "0", null);
+      larg.Add(new ActualBinding(null, q_m_c_q_i, false));
+      var l_q = new ApplySuffix(x, null, lambda, larg);
+      var bvars = new List<BoundVar>();
+      bvars.Add(new BoundVar(x, itok.val, Type.Nat()));
+      var reads = new List<FrameExpression>();
+      reads.Add(new FrameExpression(x, lhs, null));
+      reads.Add(new FrameExpression(x, new ExprDotName(x, lhs, "Repr", null), null));
+      Expression req = new ApplySuffix(x, null, new ExprDotName(x, lhs, "Valid", null), new List<ActualBinding>());
+      req = new BinaryExpr(x, BinaryExpr.Opcode.And, req, new ExprDotName(x, new ExprDotName(x, lhs, "m", null), "CH?", null));
+      req = new BinaryExpr(x, BinaryExpr.Opcode.And, req,
+                           new BinaryExpr(x, BinaryExpr.Opcode.In, lhs, new ExprDotName(x, new ExprDotName(x, lhs, "m", null), "c", null)));
+      req = new BinaryExpr(x, BinaryExpr.Opcode.And, req,
+                           new BinaryExpr(x, BinaryExpr.Opcode.And,
+                                          new BinaryExpr(x, BinaryExpr.Opcode.Le, new LiteralExpr(x, 0), iExpr),
+                                          new BinaryExpr(x, BinaryExpr.Opcode.Lt, iExpr, new ExprDotName(x, new ExprDotName(x, lhs, "m", null), "dof", null))));
+      var ll = new LambdaExpr(x, null, bvars, req, reads, l_q);
+      args.Add(new ActualBinding(null, new SeqConstructionExpr(x, Type.Nat(), q_m_dof, ll), false));
+      er = new ExprDotName(x, lhs, "Classical", null);
+      er = new ApplySuffix(x, null, er, args);
+      // Console.WriteLine("Manufactured Expr: {0}", Printer.ExprToString(er));
+    }      
+  }
+
+  public class ApplyStmt : ConcreteUpdateStatement {
+    public readonly List<AssignmentRhs> Rhss;
+    public readonly bool CanMutateKnownState;
+    public Expression OriginalInitialLhs = null;
+
+    [FilledInDuringResolution] public readonly List<Statement> ResolvedStatements = new List<Statement>();
+    public override IEnumerable<Statement> SubStatements {
+      get { return ResolvedStatements; }
+    }
+
+    [ContractInvariantMethod]
+    void ObjectInvariant() {
+      Contract.Invariant(cce.NonNullElements(Lhss));
+      Contract.Invariant(cce.NonNullElements(Rhss));
+    }
+    public ApplyStmt(IToken tok, IToken endTok, List<Expression> lhss, List<AssignmentRhs> rhss)
+      : base(tok, endTok, lhss) {
+      Contract.Requires(tok != null);
+      Contract.Requires(endTok != null);
+      Contract.Requires(cce.NonNullElements(lhss));
+      Contract.Requires(cce.NonNullElements(rhss));
+      Contract.Requires(lhss.Count != 0 || rhss.Count == 1);
+      Rhss = rhss;
+      CanMutateKnownState = false;
+    }
+  }
+
 
   public class AssignOrReturnStmt : ConcreteUpdateStatement {
     public readonly Expression Rhs; // this is the unresolved RHS, and thus can also be a method call
@@ -8043,6 +8170,43 @@ namespace Microsoft.Dafny {
     }
   }
 
+
+  public class QIfStmt : Statement {
+    public readonly bool IsBindingGuard;
+    public readonly Expression Guard;
+    public readonly BlockStmt Thn;
+    [ContractInvariantMethod]
+    void ObjectInvariant() {
+      Contract.Invariant(!IsBindingGuard || (Guard is ExistsExpr && ((ExistsExpr)Guard).Range == null));
+      Contract.Invariant(Thn != null);
+    }
+
+    public QIfStmt(IToken tok, IToken endTok, bool isBindingGuard, Expression guard, BlockStmt thn)
+      : base(tok, endTok) {
+      Contract.Requires(tok != null);
+      Contract.Requires(endTok != null);
+      Contract.Requires(!isBindingGuard || (guard is ExistsExpr && ((ExistsExpr)guard).Range == null));
+      Contract.Requires(thn != null);
+      this.IsBindingGuard = isBindingGuard;
+      this.Guard = guard;
+      this.Thn = thn;
+    }
+
+    public override IEnumerable<Statement> SubStatements {
+      get {
+        yield return Thn;
+      }
+    }
+    public override IEnumerable<Expression> NonSpecificationSubExpressions {
+      get {
+        foreach (var e in base.NonSpecificationSubExpressions) { yield return e; }
+        if (Guard != null) {
+          yield return Guard;
+        }
+      }
+    }
+  }
+
   public class GuardedAlternative : IAttributeBearingDeclaration {
     public readonly IToken Tok;
     public readonly bool IsBindingGuard;
@@ -8265,6 +8429,8 @@ namespace Microsoft.Dafny {
     }
   }
 
+
+
   /// <summary>
   /// This class is really just a WhileStmt, except that it serves the purpose of remembering if the object was created as the result of a refinement
   /// merge.
@@ -8311,6 +8477,98 @@ namespace Microsoft.Dafny {
           yield return End;
         }
       }
+    }
+  }
+
+  public class QForLoop {
+    public static Statement Transform(IToken x, IToken endTok, BlockStmt body,
+                                      IToken main, IToken ctrl, IToken _ctrl,
+                                      BoundVar loopIndex, Expression start,
+                                      List<AttributedExpression> invariants,
+                                      List<Expression> decreases,
+                                      Attributes decAttrs,
+                                      Attributes modAttrs,
+                                      List<FrameExpression> mod) {
+      var qrf = QRewriteFactory.qrf;
+      var stmts = new List<Statement>();
+      // The following statement protects against crashes in case of parsing errors
+      if (body == null) {
+        body = new BlockStmt(x, endTok, new List<Statement>());
+      }
+      Expression mainExpr = qrf.ToExpression(main);
+      Expression ctrlExpr = qrf.ToExpression(ctrl);
+      // 1. Perform move of [ctrl] and sync it with [main] to match the [dof]
+      // 1.0 Make a new varaible to hold the original control variable 
+      // IToken _ctrl = qrf.UnderscoreToken(ctrl);
+      Expression _ctrlExpr = qrf.ToExpression(_ctrl);
+      // 1.1 & 1.2 Move [ctrl] to [_ctrl] and leave a dummy qreg in [ctrl]
+      var dec = qrf.CreateLocalVar(_ctrl);
+      stmts.Add(dec);
+      var init = qrf.MakeDummyAssignment(x, endTok, _ctrlExpr);
+      stmts.Add(init);
+      var move = qrf.QUpdate(
+        ctrl, endTok, ctrlExpr,
+        qrf.DotCall(ctrl, ctrlExpr, "MoveTo", new List<Expression>() { _ctrlExpr }));
+      stmts.Add(move);
+      // 1.3 Make the actual initialization by the effect of [SyncWith]
+      var syncExpr = qrf.DotCall(x, mainExpr, "SyncWith", new List<Expression>(){ ctrlExpr });
+      var sync = qrf.QUpdate(x, endTok, ctrlExpr, syncExpr);
+      stmts.Add(sync);
+      // 1.4 Copy the card into a variable as the upperbound of the iteration
+      var _card = qrf.UnderscoreToken("card");
+      dec = qrf.CreateLocalVar(_card, Type.Nat());
+      stmts.Add(dec);
+      var _cardExpr = qrf.ToExpression(_card);
+      var card = qrf.Assign(
+        ctrl, endTok, _cardExpr, new ExprDotName(ctrl, _ctrlExpr, "card", null)); 
+      stmts.Add(card);
+      // End of 1: Now [_ctrl] stores the original [ctrl] and [ctrl] is synced
+      //           with [main]
+
+      // 2. Transform the body of QFor loop (close to what I have done in [qif])
+      //    But, since I have already know that the main variable is [main]
+      //    I don't need to lookup anymore.
+      var loopStmts = new List<Statement>();
+      // var loopStmts = body.Body;
+      // 2.0  create a new variable to catch the qubit splitted from [y]
+      var _x = qrf.UnderscoreToken("x");
+      dec = qrf.CreateLocalVar(_x);
+      loopStmts.Add(dec);
+      Expression _xExpr = qrf.ToExpression(_x);
+      var splitCall = qrf.DotCall(
+        ctrl, _ctrlExpr, "HSplit", new List<Expression>(){ new LiteralExpr(null, new BigInteger(1))});
+      var split = qrf.Assign(ctrl, endTok, _xExpr, splitCall);
+      loopStmts.Add(split);
+      // 2.1 replicate the [main] qubit into [_main]
+      var _main = qrf.UnderscoreToken(main);
+      var _mainExpr = qrf.ToExpression(_main);
+      dec = qrf.CreateLocalVar(_main);
+      loopStmts.Add(dec);
+      init = qrf.MakeDummyAssignment(main, endTok, _mainExpr);
+      loopStmts.Add(init);
+      var rep = qrf.QUpdate(
+        main, endTok, _mainExpr,
+        qrf.DotCall(main, mainExpr, "Replicate",
+                                new List<Expression>(){ _mainExpr }));
+      loopStmts.Add(rep);
+      var cloner = new QSubstCloner(main.val, _main.val);
+      body = (BlockStmt) cloner.CloneStmt(body);
+      body.Body.InsertRange(0, loopStmts);
+      var merge = qrf.QUpdate(
+        main, endTok, mainExpr,
+        qrf.DotCall(main, mainExpr, "MergeWithIn",
+                                new List<Expression>(){ _mainExpr, _xExpr, ctrlExpr }));
+      body.Body.Add(merge);
+      var loopBody = body;
+      var forLoop = new ForLoopStmt(
+        x, endTok, loopIndex, start,
+        _cardExpr,
+        true, invariants, new Specification<Expression>(decreases, decAttrs),
+        new Specification<FrameExpression>(mod, modAttrs), loopBody, null);
+      stmts.Add(forLoop);
+      Statement stmt = new BlockStmt(x, endTok, stmts);
+      Console.WriteLine("QFOR: {0}", Printer.StatementToString(stmt));
+      return stmt;
     }
   }
 
@@ -13016,6 +13274,159 @@ namespace Microsoft.Dafny {
     }
   }
 
+  public class QJudgementExpression : ConcreteSyntaxExpression {
+    public readonly List<IToken> Qs;
+    public readonly Expression En;
+    public readonly IToken Kind;
+    public readonly Expression Ebody;
+    public readonly Expression Edof;
+    public readonly IToken IsStrict; // if it's strict, enforece Keys requirements
+
+    public QJudgementExpression(IToken tok, List<IToken> qs, Expression en,
+                                IToken kind, Expression ebody, Expression edof,
+                                IToken isStrict)
+      : base(tok) {
+      Contract.Requires(qs != null);
+      Contract.Requires(((qs.Count == 1) && (kind.val == "ch") && (edof != null)) ||
+                        (qs.Count == 1 && ((kind.val == "had") || (kind.val == "nor"))));
+      Qs = qs;
+      En = en;
+      Kind = kind;
+      Ebody = ebody;
+      Edof = edof;
+      IsStrict = isStrict;
+    }
+
+    static public Expression TokToExpr(IToken name) => new NameSegment(name, name.val, null);
+
+    // FIXME
+    // There are a lot more refinement on session we can do
+    // We can force all qregisters appearing has the same session
+    //   type(p, q) ~~~>> p.m.c == q.m.c
+    // We can force all qregisters to be all qubits in the session
+    //   type(p, q) ~~~>> p.m.c == q.m.c == { p , q }
+    public void Expand(Expression rewrittenBody)
+    {
+      string sKind = Kind.val == "nor" ? "Nor?" : (Kind.val == "had" ? "Had?" : "CH?");
+      List<Expression> cardExprs = new List<Expression>();
+      List<Expression> dofExprs = new List<Expression>();
+      List<Expression> chExprs = new List<Expression>();
+      List<Expression> validExprs = new List<Expression>();
+      List<Expression> kindExprs = new List<Expression>();
+      List<Expression> inExprs = new List<Expression>();
+
+      Func<Expression, Expression> validOf = expr =>
+        new ApplySuffix(tok, null, new ExprDotName(tok, expr, "Valid", null), new List<ActualBinding>());
+      
+      Func<IToken, Expression, Expression> mkIn = (name, mexpr) => new BinaryExpr(
+        tok, BinaryExpr.Opcode.In,
+        new NameSegment(name, name.val, null), 
+        new ExprDotName(name, mexpr, "c", null));
+
+      Expression keyExpr = null;
+      Expression lastCH = null, lastDof = null;
+      bool first = true;
+      foreach(var q in Qs) {
+        var qExpr = TokToExpr(q);
+        var mExpr = new ExprDotName(q, qExpr, "m", null);
+        cardExprs.Add(new ExprDotName(q, qExpr, "card", null));
+        validExprs.Add(validOf(qExpr));
+        kindExprs.Add(new ExprDotName(tok, new ExprDotName(tok, qExpr, "m", null), sKind, null));
+        if (Edof != null) {
+          var thisDof = new ExprDotName(q, mExpr, "dof", null);
+          if (lastDof != null)
+            dofExprs.Add(new BinaryExpr(q, BinaryExpr.Opcode.Eq, lastDof, thisDof));
+          lastDof = thisDof;
+          var thisCH = new ExprDotName(q, mExpr, "c", null);
+          if (lastCH != null)
+            chExprs.Add(new BinaryExpr(q, BinaryExpr.Opcode.Eq, lastCH, thisCH));
+          lastCH = thisCH;
+          inExprs.Add(mkIn(q, mExpr));
+        }
+        if (IsStrict != null && first) {
+          // It's actually not bad after unrolling + branch prediction
+          first = false;
+          keyExpr = new ExprDotName(tok, new ExprDotName(tok, mExpr, "c", null), "Keys", null);
+        }
+      }
+
+      // Merge
+      Expression kindExpr, validExpr; 
+      Expression inExpr = null, dofExpr = null, chExpr = null;
+
+      Expression cardExpr = cardExprs[0];
+      for (int i = 1; i < cardExprs.Count; ++ i) {
+        cardExpr = new BinaryExpr(Qs[i], BinaryExpr.Opcode.Add, cardExpr, cardExprs[i]);
+        
+      }
+
+
+      kindExpr = chainAndExpression(kindExprs, Kind);
+      validExpr = chainAndExpression(validExprs, tok);
+      cardExpr = new BinaryExpr(En.tok, BinaryExpr.Opcode.Eq, En, cardExpr); 
+
+      if (Edof != null) {
+        if (chExprs.Count == 0) {
+          chExpr = new LiteralExpr(null, true);
+        } else {
+          chExpr = chainAndExpression(chExprs, Kind);
+        }
+
+        inExpr = chainAndExpression(inExprs, Kind);
+        dofExprs.Add(new BinaryExpr(En.tok, BinaryExpr.Opcode.Eq, Edof, lastDof));
+        dofExpr = chainAndExpression(dofExprs, En.tok);
+      }
+      
+      var total = new List<Expression>() {kindExpr, validExpr, cardExpr};
+      if (IsStrict != null && Edof != null) {
+        Contract.Ensures(keyExpr != null);
+        var strictEnforce =
+          new BinaryExpr(
+            IsStrict, BinaryExpr.Opcode.Eq, keyExpr,
+            new SetDisplayExpr(
+              IsStrict, true,
+              Qs.Select(q => (Expression) new NameSegment(q, q.val, null)).ToList()));
+        total.Add(strictEnforce);
+      } 
+      if (Edof != null) {
+        total.Add(inExpr); total.Add(dofExpr); total.Add(chExpr);
+      }
+      Expression e1 = chainAndExpression(total, tok);
+      
+      /* 
+      Fill the rest 
+      */
+      ResolvedExpression = new BinaryExpr(tok, BinaryExpr.Opcode.And, e1, rewrittenBody);
+      Console.WriteLine("[QJudgementExpression] Resolved: {0}",
+                        Printer.ExprToString(ResolvedExpression));
+    }
+
+    private Expression chainAndExpression(List<Expression> es, IToken tok) {
+      Contract.Requires(es != null && es.Count >= 1);
+      var e = es[0]; 
+      for (int i = 1; i < es.Count; ++ i) {
+        e = new BinaryExpr(tok, BinaryExpr.Opcode.And, e, es[i]);
+      }
+      return e;
+    }
+        
+    public string GetAccessor(ErrorReporter reporter) {
+      string accessor = "";
+      var kind = Kind.val;
+      if (kind == "nor") {
+        accessor = "b";
+      } else if (kind == "had") {
+        accessor = "h";
+      } else if (kind == "ch") {
+        accessor = "c";
+      } else {
+        reporter.Error(MessageSource.Compiler, Token.NoToken,
+                       "[QJudgementRewriter] unsupported kind {0}", kind);
+      }
+      return accessor;
+    }
+  }
+
   /// <summary>
   /// The parsing and resolution/type checking of expressions of the forms
   ///   0. ident &lt; Types &gt;
@@ -13320,4 +13731,7 @@ namespace Microsoft.Dafny {
       return true;  // by default, visit the sub-parts with the same "st"
     }
   }
+
+
+
 }

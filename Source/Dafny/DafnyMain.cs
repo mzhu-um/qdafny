@@ -120,6 +120,23 @@ namespace Microsoft.Dafny {
       ModuleDecl module = new LiteralModuleDecl(new DefaultModuleDecl(), null);
       BuiltIns builtIns = new BuiltIns();
 
+      string codebase = cce.NonNull(System.IO.Path.GetDirectoryName(cce.NonNull(System.Reflection.Assembly.GetExecutingAssembly().Location)));
+      string qPreludePath = System.IO.Path.Combine(codebase, "QPrelude.dfy");
+      DafnyFile qFile;
+      try { qFile = new DafnyFile(qPreludePath); } catch (IllegalDafnyFile) {
+        return (String.Format("QPrelude.dfy is ill-formed."));
+      }
+
+      files.Insert(0, qFile);
+
+/*       {
+        ModuleDecl qmodule = module;
+        string qerr = ParseFile(qFile, null, module, builtIns, new Errors(reporter), !qFile.isPrecompiled, !qFile.isPrecompiled);
+        if (qerr != null) {
+          return qerr;
+        }
+      }
+ */
       foreach (DafnyFile dafnyFile in files) {
         Contract.Assert(dafnyFile != null);
         if (DafnyOptions.O.XmlSink != null && DafnyOptions.O.XmlSink.IsOpen && !dafnyFile.UseStdin) {
@@ -151,7 +168,6 @@ namespace Microsoft.Dafny {
       program = new Program(programName, module, builtIns, reporter);
 
       MaybePrintProgram(program, DafnyOptions.O.DafnyPrintFile, false);
-
       return null; // success
     }
 
@@ -228,8 +244,8 @@ namespace Microsoft.Dafny {
         IToken tok = include == null ? Token.NoToken : include.tok;
         errs.SemErr(tok, "Unable to open included file");
         return $"Error opening file \"{fn}\": {e.Message}";
-      }
-      return null; // Success
+      };
+            return null; // Success
     }
 
     public static async Task<(PipelineOutcome Outcome, PipelineStatistics Statistics)> BoogieOnce(

@@ -1590,6 +1590,7 @@ namespace Microsoft.Dafny {
       } else {
         Contract.Assert(false); throw new cce.UnreachableException();  // unexpected statement
       }
+      wr.Flush();
     }
 
     private void PrintModifyStmt(int indent, ModifyStmt s, bool omitFrame) {
@@ -2802,7 +2803,9 @@ namespace Microsoft.Dafny {
         wr.Write("[BoogieFunctionCall]");  // this prevents debugger watch window crash
       } else if (expr is Resolver_IdentifierExpr) {
         wr.Write("[Resolver_IdentifierExpr]");  // we can get here in the middle of a debugging session
-      } else {
+      } else if (expr is QJudgementExpression) {
+        wr.Write("[QJudgementExpression]");
+      }else {
         Contract.Assert(false); throw new cce.UnreachableException();  // unexpected expression
       }
     }

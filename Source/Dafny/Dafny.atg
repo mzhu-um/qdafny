@@ -30,6 +30,8 @@ readonly bool theCompileThisFile;
 DafnyOptions theOptions;
 int anonymousIds = 0;
 
+readonly Printer printer = new Printer(new StreamWriter(Console.OpenStandardOutput()));
+readonly QRewriteFactory qrf = QRewriteFactory.qrf;
 /// <summary>
 /// Holds the modifiers given for a declaration
 ///
@@ -781,6 +783,7 @@ TOKENS
   arrayToken = "array" [('1' digit | posDigitFrom2 ) {digit}] ['?'].
   bvToken = "bv" ( '0' | posDigit {digit} ).
   bool = "bool".
+  qubits = "qubits".
   char = "char".
   int = "int".
   nat = "nat".
@@ -815,6 +818,7 @@ TOKENS
   verticalbar = '|'.
   doublecolon = "::".
   gets = ":=".
+  apply = "*=".
   boredSmiley = ":|".
   bullet = '\u2022'.
   dot = '.'.
@@ -829,10 +833,16 @@ TOKENS
   else = "else".
   as = "as".
   is = "is".
+  becomes = "becomes".
+  with = "with".
+  exactly = "exactly".
+  typeof = "typeof".
   by = "by".
   in = "in".
+  dollar = "$".
   decreases = "decreases".
   invariant = "invariant".
+  classical = "classical".
   function = "function".
   predicate = "predicate".
   least = "least". /* not a keyword by itself, but part of a keyword phrase */
@@ -876,6 +886,7 @@ TOKENS
   closeAngleBracket = '>'.
   singleeq = "=".
   eq = "==".
+  qeq = "===".
   neq = "!=".
   neqAlt = '\u2260'.
   star = '*'.
@@ -2051,6 +2062,7 @@ TypeAndToken<out IToken tok, out Type ty, bool inExpressionContext>
                                        }
                                        ty = new SeqType(gt != null ? gt[0] : null);
                                     .)
+  | "qreg"                          (. tok = t;  ty = new UserDefinedType(tok, "Qubits", null); .)
   | "string"                        (. tok = t;  ty = new UserDefinedType(tok, tok.val, null); .)
   | "object"                        (. tok = t;  ty = new UserDefinedType(tok, tok.val, null); .)
   | "object?"                       (. tok = t;  ty = new UserDefinedType(tok, tok.val, null); .)
@@ -2642,6 +2654,8 @@ OneStmt<out Statement/*!*/ s>
   | RevealStmt<out s>
   | SkeletonStmt<out s>
   | YieldStmt<out s>
+  | QForLoopStmt<out s>
+  | QIfStmt<out s>
   )
   .
 
@@ -2730,12 +2744,15 @@ UpdateStmt<out Statement/*!*/ s>
      Expression e;
      AssignmentRhs r;
      IToken x = Token.NoToken;
+     IToken h = null;
+     Expression lambda = null; 
      IToken endTok = Token.NoToken;
      Attributes attrs = null;
      IToken suchThatAssume = null;
      Expression suchThat = null;
      IToken keywordToken = null;
      Expression exceptionExpr = null;
+     bool isApply = false;
   .)
 ( Lhs<out e>                       (. x = e.tok; .)
   ( { Attribute<ref attrs> }
@@ -2759,6 +2776,10 @@ UpdateStmt<out Statement/*!*/ s>
       Expression<out exceptionExpr, false, false>
       { "," Rhs<out r>             (. rhss.Add(r); .)
       }
+   | "*="                         (. x = t; isApply = true; .)
+      ( Ident<out h>
+      | "cl" "(" LambdaExpression<out lambda, false, false> ")"
+      )
     )
     ";"                            (. endTok = t; .)
   | ":"                            (. SemErr(t, "invalid statement (did you forget the 'label' keyword?)"); .)
@@ -2772,7 +2793,9 @@ UpdateStmt<out Statement/*!*/ s>
    }
    ";"                             (. endTok = t; .)
 )
-  (. if (suchThat != null) {
+  (. 
+   // Console.WriteLine("================================");
+     if (suchThat != null) {
        s = new AssignSuchThatStmt(x, endTok, lhss, suchThat, suchThatAssume, null);
      } else if (exceptionExpr != null) {
        s = new AssignOrReturnStmt(x, endTok, lhss, exceptionExpr, keywordToken, rhss);
@@ -2780,11 +2803,42 @@ UpdateStmt<out Statement/*!*/ s>
        if (lhss.Count == 0 && rhss.Count == 0) {
          s = new BlockStmt(x, endTok, new List<Statement>()); // error, give empty statement
        } else {
-         s = new UpdateStmt(x, endTok, lhss, rhss);
+         if ((lhss.Count == 1) && isApply) {
+           var lhs = lhss[0];   
+           var args = new List<ActualBinding>();
+           if (lhs is SeqSelectExpr sel) {
+             if (h == null){
+               // "cl" is not applicable on non-CH type: a parse error
+               s = dummyStmt; return; 
+             }
+             lhs = sel.Seq;
+             var e1 = sel.E1 ??
+               new BinaryExpr(null, BinaryExpr.Opcode.Add,
+                              new LiteralExpr(null, new BigInteger(1)), sel.E0);
+             args.Add(new ActualBinding(null, sel.E0, false));
+             args.Add(new ActualBinding(null, e1, false));
+             h.val = h.val + "Slice";;
+           }
+
+           Expression er;
+           if (h != null) {
+             er = new ExprDotName(x, lhs, h.val, null);
+             er = new ApplySuffix(x, null, er, args);
+           } else {
+             QUpdateStmt.TransformClassical(x, lhs, lambda, ref args, out er);
+           }
+           // Console.WriteLine("Factorized Expr {0}", Printer.ExprToString(er));
+           var rhs = new ExprRhs(er);
+           s = new UpdateStmt(x, endTok, rhs, lhs);
+         } else {
+           s = new UpdateStmt(x, endTok, lhss, rhss);
+         }
        }
-     }
+  }
+     // Console.WriteLine("Stmt: {0}", Printer.StatementToString(s));
   .)
   .
+
 
 /*------------------------------------------------------------------------*/
 Rhs<out AssignmentRhs r>
@@ -2821,6 +2875,7 @@ Rhs<out AssignmentRhs r>
        }
     .)
   | "*"                                (. r = new HavocRhs(t); .)
+  | NorDisplayRhs<out r>               (. .)
   | Expression<out e, false, true>     (. r = new ExprRhs(e); .)
   )
   { Attribute<ref attrs> }             (. r.Attributes = attrs; .)
@@ -2990,6 +3045,85 @@ IfStmt<out Statement/*!*/ ifStmt>
   )
   .
 
+QIfStmt<out Statement/*!*/ ifStmt>
+= (. Contract.Ensures(Contract.ValueAtReturn(out ifStmt) != null); IToken/*!*/ x;
+     Expression guard = null;  
+     List<Statement> body = new List<Statement>();
+     Statement s = null;
+     IToken bodyEnd;
+     List<String> augmented = new List<String>();
+     ifStmt = dummyIfStmt;  // to please the compiler
+  .)
+  "qif"                       (. x = t; .)
+  ( // TODO : Do I even need the ellipsis form?
+    "("
+    Expression<out guard, false, false>
+    (.
+     var guardAssertion =
+       new AssertStmt(guard.tok, Token.NoToken,
+                      new ExprDotName(guard.tok, new ExprDotName(x, guard, "m", null), "Had?", null), null, null, null);
+     guardAssertion.AddDefaultErrorMessage("invalid qreg type for qif");
+     body.Add(guardAssertion);
+     guardAssertion =
+       new AssertStmt(guard.tok, Token.NoToken,
+                      new BinaryExpr(guard.tok, BinaryExpr.Opcode.Eq, new ExprDotName(x, guard, "card", null), new LiteralExpr(null, 1)),
+                      null, null, null);
+     guardAssertion.AddDefaultErrorMessage("invalid qreg cardinality");
+     body.Add(guardAssertion);
+     .)
+    ")"
+    "{"
+    { UpdateStmt<out s>
+        (.
+         if (s is UpdateStmt up) {
+           var q = up.QExpr;
+           if (q != null && !augmented.Contains(q.tok.val)) {
+             augmented.Add(q.tok.val);
+             // Replicate the qubit and bind it to [qfresh]
+             var freshtok = new Token(); freshtok.val = "_" + q.tok.val;
+             var qfresh = new NameSegment(freshtok, freshtok.val, null);
+             var replicate = new ApplySuffix(x, null, new ExprDotName(x, q, "Replicate", null),
+                                             new List<ActualBinding>() {
+                                               new ActualBinding(null, qfresh)
+                                             });
+             var dec = qrf.CreateLocalVar(freshtok);
+             body.Add(dec);
+             var init = qrf.MakeDummyAssignment(x, s.EndTok, qfresh);
+             body.Add(init);
+             var update = new UpdateStmt(x, s.EndTok, new ExprRhs(replicate), q);
+             body.Add(update);
+             // replace old updatestmt receiver with the new receiver
+             s = up.SubstituteLHS("_" + q.tok.val);
+           }
+           // Console.WriteLine("[SUBST] " + Printer.StatementToString(s));
+           body.Add(s);
+         }
+         .)
+     }
+    "}"                         (. bodyEnd = t; .)
+    (.
+       foreach (var v in augmented) {
+         var tok = new Token(); tok.val = v;
+         var _tok = new Token(); _tok.val = "_" + v;
+         var qExpr = new NameSegment(tok, tok.val, null);
+         var _qExpr = new NameSegment(_tok, _tok.val, null);
+         var with = new List<ActualBinding>();
+         with.Add(new ActualBinding(null, _qExpr));
+         with.Add(new ActualBinding(null, guard));
+         // var expr = new ApplySuffix(x, null, new ExprDotName(tok, qExpr, "Merge", null),
+         //                            new List<ActualBinding>(){ new ActualBinding(null, _qExpr)});
+         var expr = new ApplySuffix(x, null, new ExprDotName(tok, qExpr, "MergeWith", null),
+                                    with);
+         var stmt = new UpdateStmt(x, Token.NoToken, new ExprRhs(expr), guard);
+         body.Add(stmt);
+       }
+       ifStmt = new BlockStmt(x, bodyEnd, body);
+       Console.WriteLine(Printer.StatementToString(ifStmt));
+    .)
+  )
+  .
+
+
 /*------------------------------------------------------------------------*/
 AlternativeBlock<.bool allowBindingGuards, out List<GuardedAlternative> alternatives, out bool usesOptionalBraces, out IToken endTok.>
 = (. alternatives = new List<GuardedAlternative>();
@@ -3151,6 +3285,57 @@ ForLoopDirection<out bool goingUp>
      }
   .)
   .
+
+
+/*------------------------------------------------------------------------*/
+QForLoopStmt<out Statement stmt>
+= (. Contract.Ensures(Contract.ValueAtReturn(out stmt) != null);
+     IToken x;
+     BoundVar loopIndex;
+     Expression start;
+     IToken main = null, ctrl = null, _ctrl = null;
+     List<AttributedExpression> invariants = new List<AttributedExpression>();
+     List<Expression> decreases = new List<Expression>();
+     Attributes decAttrs = null;
+     Attributes modAttrs = null;
+     List<FrameExpression> mod = null;
+
+     BlockStmt body = null;
+     IToken bodyStart = null, bodyEnd = null, endTok = Token.NoToken;
+     stmt = dummyStmt;  // to please the compiler
+  .)
+  "qfor"                    (. x = t; .)
+  "("
+    IdentTypeOptional<out loopIndex>
+    ":="
+    Expression<out start, false, false>
+  ")"
+  "in"
+  Ident<out ctrl>
+  "becomes"
+  Ident<out _ctrl>
+  "with"
+  Ident<out main>
+  LoopSpec<invariants, decreases, ref mod, ref decAttrs, ref modAttrs>
+  BlockStmt<out body, out bodyStart, out bodyEnd>  (. endTok = body.EndTok; .)
+  
+  (. stmt = QForLoop.Transform(
+    x, endTok, body, main, ctrl, _ctrl, loopIndex, start,
+    invariants, decreases, decAttrs, modAttrs, mod); .)
+  .
+
+// Do I need this?
+// QForLoopDirection<out bool goingUp>
+// = (. goingUp = true; .)
+//   ident
+//   (. if (t.val == "downto") {
+//        goingUp = false;
+//      } else if (t.val != "to") {
+//        SemErr(t, "Expected 'to' or 'downto'");
+//      }
+//   .)
+//   .
+
 
 /*------------------------------------------------------------------------*/
 LoopSpec<.List<AttributedExpression> invariants, List<Expression> decreases, ref List<FrameExpression> mod, ref Attributes decAttrs, ref Attributes modAttrs.>
@@ -3908,14 +4093,14 @@ BitvectorFactor<out Expression e0, bool allowLemma, bool allowLambda, bool allow
 
 /*------------------------------------------------------------------------*/
 AsExpression<out Expression e, bool allowLemma, bool allowLambda, bool allowBitwiseOps>
-= (. IToken tok; IToken x; Type toType; .)
-  UnaryExpression<out e, allowLemma, allowLambda, allowBitwiseOps>
+  = (. IToken tok; IToken x; Type toType; .)
+  UnaryExpression<out e, allowLemma, allowLambda, allowBitwiseOps> 
   { IF(IsAsOrIs())
     ( "as"                                  (. tok = t; .)
       TypeAndToken<out x, out toType, true> (. e = new ConversionExpr(tok, e, toType); .)
-    | "is"                                  (. tok = t; .)
+      | "is"                                  (. tok = t; .)
       TypeAndToken<out x, out toType, true> (. e = new TypeTestExpr(tok, e, toType); .)
-    )
+      )
   }
   .
 
@@ -3948,6 +4133,8 @@ PrimaryExpression<out Expression e, bool allowLemma, bool allowLambda, bool allo
     { IF(IsSuffix()) Suffix<ref e> }
   | ConstAtomExpression<out e>
     { IF(IsSuffix()) Suffix<ref e> }
+  | QTypeJudgementExpression<out e>
+    // { IF(IsSuffix()) Suffix<ref e> }
   )
   .
 
@@ -3993,6 +4180,43 @@ ConstAtomExpression<out Expression e>
   | ParensExpression<out e>
   )
   .
+
+
+/*------------------------------------------------------------------------*/
+/* A ConstAtomExpression is never an l-value, and does not start with an identifier. */
+QTypeJudgementExpression<out Expression e>
+= (. Contract.Ensures(Contract.ValueAtReturn(out e) != null);
+     IToken/*!*/ x;
+     IToken kind = null;
+     IToken q;
+     List<IToken> qs = new List<IToken>();
+     Expression body;
+     Expression n;
+     Expression dof = null;
+     IToken isStrict = null;
+     e = dummyExpr;
+   .)
+    "typeof" (. x = t; .)
+    "("
+    Ident<out q> (. qs.Add(q); .)
+    { "," Ident<out q> (. qs.Add(q); .) }
+    ")"
+    "is"
+    [ "exactly"  (.  isStrict = t; .)] 
+    Expression<out n, false, false> 
+    "$"                         
+    (   "nor"                         (.  kind = t; .)
+      | "had"                         (.  kind = t; .)
+      | "ch"                          (.  kind = t; .)
+        "(" Expression <out dof, false, false> ")"
+    )  
+    "{"
+     Expression<out body, false, false> 
+    "}"
+    (. 
+     e = new QJudgementExpression(x, qs, n, kind, body, dof, isStrict);
+     .)
+.
 
 /*------------------------------------------------------------------------*/
 LiteralExpression<out Expression e>
@@ -4160,12 +4384,42 @@ SeqDisplayExpr<out Expression e>
     "["                                      (. List<Expression> elements = new List<Expression/*!*/>();
                                                 x = t;
 
-                                             .)
+                                            .)
     [ Expressions<elements> ]                (. e = new SeqDisplayExpr(x, elements);
                                              .)
     "]"
   )
   .
+
+/*------------------------------------------------------------------------*/
+NorDisplayRhs<out AssignmentRhs r>
+= (. Contract.Ensures(Contract.ValueAtReturn(out r) != null);
+     IToken x = null;
+     Expression n, f;
+     List<ActualBinding> args = new List<ActualBinding>();
+     r = null;
+  .)
+  (
+    "nor"                          (. x = t; .)
+    "("
+    Expression<out n, true, true>
+    ","
+    Expression<out f, true, true>
+    ")"
+    (. 
+       var sExpr = new SeqConstructionExpr(x, theBuiltIns.Nat(), n, f);
+       args.Add(new ActualBinding(null, n, false));
+       args.Add(new ActualBinding(null, sExpr, false));
+       Expression e = new NameSegment(t, "Qubits", null);
+       e = new ExprDotName(t, e, "PrepareAny", null);
+       r = new TypeRhs(x,
+                       new UserDefinedType(Token.NoToken, e),
+                       args);
+     .)
+    )
+  .
+
+
 
 /*------------------------------------------------------------------------*/
 MapDisplayExpr<out Expression e>

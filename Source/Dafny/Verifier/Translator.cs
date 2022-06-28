@@ -454,6 +454,7 @@ namespace Microsoft.Dafny {
       Bpl.GlobalVariable heap = null;
       Bpl.Constant allocField = null;
       foreach (var d in prog.TopLevelDeclarations) {
+        // Console.WriteLine("TopLevelDeclarations:\t" + d);
         if (d is Bpl.TypeCtorDecl) {
           Bpl.TypeCtorDecl dt = (Bpl.TypeCtorDecl)d;
           if (dt.Name == "Seq") {
@@ -652,10 +653,17 @@ namespace Microsoft.Dafny {
 
     static Bpl.Program ReadPrelude() {
       string preludePath = DafnyOptions.O.DafnyPrelude;
+      string qPreludePath = DafnyOptions.O.QPrelude;
       if (preludePath == null) {
         //using (System.IO.Stream stream = cce.NonNull( System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("DafnyPrelude.bpl")) // Use this once Spec#/VSIP supports designating a non-.resx project item as an embedded resource
         string codebase = cce.NonNull(System.IO.Path.GetDirectoryName(cce.NonNull(System.Reflection.Assembly.GetExecutingAssembly().Location)));
         preludePath = System.IO.Path.Combine(codebase, "DafnyPrelude.bpl");
+      }
+
+      if (qPreludePath == null) {
+        //using (System.IO.Stream stream = cce.NonNull( System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("DafnyPrelude.bpl")) // Use this once Spec#/VSIP supports designating a non-.resx project item as an embedded resource
+        string codebase = cce.NonNull(System.IO.Path.GetDirectoryName(cce.NonNull(System.Reflection.Assembly.GetExecutingAssembly().Location)));
+        qPreludePath = System.IO.Path.Combine(codebase, "QPrelude.bpl");
       }
 
       Bpl.Program prelude;
@@ -6309,6 +6317,9 @@ namespace Microsoft.Dafny {
 
       } else if (expr is ConcreteSyntaxExpression) {
         var e = (ConcreteSyntaxExpression)expr;
+        if (e.ResolvedExpression == null) {
+          Console.WriteLine("UNRESOLVED EXPRESSION: {0}", expr);
+        }
         CheckWellformedWithResult(e.ResolvedExpression, options, result, resultType, locals, builder, etran);
         result = null;
 
@@ -6319,6 +6330,8 @@ namespace Microsoft.Dafny {
         }
 
       } else {
+        Console.WriteLine("Failed with a {0} Expression, {1}", expr,
+          expr is ConcreteSyntaxExpression);
         Contract.Assert(false); throw new cce.UnreachableException();  // unexpected expression
       }
 

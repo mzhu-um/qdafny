@@ -33,5 +33,7 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="DafnyPrelude.bpl" CopyToOutputDirectory="PreserveNewest" />
+    <!-- <Content Include="QPrelude.bpl" CopyToOutputDirectory="PreserveNewest" /> -->
+    <Content Include="QPrelude.dfy" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

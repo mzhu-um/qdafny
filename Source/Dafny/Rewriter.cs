@@ -1526,8 +1526,6 @@ namespace Microsoft.Dafny {
   }
 
 
-
-
   /// <summary>
   /// Replace all occurrences of attribute {:timeLimitMultiplier X} with {:timeLimit Y}
   /// where Y = X*default-time-limit or Y = X*command-line-time-limit
@@ -2053,6 +2051,198 @@ namespace Microsoft.Dafny {
     }
   }
 
+  public class QRewriter : IRewriter {
+    public QRewriter(ErrorReporter reporter) : base(reporter) {
+      Contract.Requires(reporter != null);
+    }
+
+    // internal override void PreResolve(ModuleDefinition m) {
+    //   var qvisitor = new QJudgementVisitor(Reporter);
+    //   Console.WriteLine("Now Visiting {0}", m.Name);
+    //   foreach (var decl in ModuleDefinition.AllCallables(m.TopLevelDecls)) {
+    //       qvisitor.Visit(decl, true);
+    //   }
+    // }
+
+
+    // internal override void PostResolveIntermediate(ModuleDefinition m) {
+    //   var qvisitor = new QJudgementVisitor(Reporter);
+    //   foreach (var decl in ModuleDefinition.AllCallables(m.TopLevelDecls)) {
+    //     qvisitor.Visit(decl, true);
+    //   }
+    // }
+
+    public void RewriteQ(QJudgementExpression judExpr) {
+      var mainExpr = QJudgementExpression.TokToExpr(judExpr.Qs[0]);
+      var cloner = new QubitsSeqCloner(judExpr.GetAccessor(Reporter), mainExpr, Reporter);
+      var clonedBody = cloner.CloneExpr(judExpr.Ebody);
+      judExpr.Expand(clonedBody);
+    }
+
+    class QubitsSeqCloner : Cloner {
+      readonly ErrorReporter reporter;
+      public readonly string Accessor;
+      public readonly Expression MainExpr;
+      public QubitsSeqCloner(string accessor, Expression mainExpr, ErrorReporter reporter) {
+        Contract.Requires(reporter != null);
+        this.reporter = reporter;
+        MainExpr = mainExpr;
+        Accessor = accessor;
+      }
+
+      public override Expression CloneExpr(Expression expr) {
+        if (expr is SeqSelectExpr e) {
+          var ty = e.Seq.Type.NormalizeExpand();
+          var qExpr = CloneExpr(e.Seq);
+          Expression clonedSeq = qExpr;
+          if (ty.IsQubitsType) {
+            // TODO: Add all Qs into this class and check the occurence before substitution
+            if (Accessor == "c") {
+              /* m.c[q] */
+              clonedSeq = new ExprDotName(
+                qExpr.tok, new ExprDotName(qExpr.tok, CloneExpr(MainExpr), "m", null), Accessor, null);
+              clonedSeq = new SeqSelectExpr(qExpr.tok, true, clonedSeq, qExpr, null);
+            } else {
+              clonedSeq = new ExprDotName(
+                qExpr.tok, new ExprDotName(qExpr.tok, qExpr, "m", null), Accessor, null);
+            }
+          }
+          return new SeqSelectExpr(Tok(e.tok), e.SelectOne, clonedSeq, CloneExpr(e.E0), CloneExpr(e.E1));
+        } else if (expr is BinaryExpr be) {
+          if (be.Op == BinaryExpr.Opcode.In) {
+            var rExpr = be.E1; 
+            var ty = rExpr.Type.NormalizeExpand();
+            var clonedR = CloneExpr(rExpr);
+            if (ty.IsQubitsType) {
+              clonedR = new ExprDotName(clonedR.tok,
+                                        new ExprDotName(clonedR.tok, clonedR, "m", null),
+                                        Accessor, null);
+            }
+            return new BinaryExpr(Tok(be.tok), be.Op, CloneExpr(be.E0), clonedR);
+          }
+        }
+        return base.CloneExpr(expr);
+      }
+    }
+
+
+    // Low Priority: Provide `| _ |` syntax for Qubits type.
+    // This would require large scale expression rewriting to achieve this
+    // Might as well add a new virtual method for each Expression class of type
+    //   delegate Expression FuncRef(ref Expression expr)
+    //   MapSubExpressions(ref Expression expr, FuncRef)
+    // Keep apply delegation to each sub expression until the delegation returns
+    // null
+    internal void RewriteQCard(ref Expression expr) {
+      Contract.Requires(expr != null);
+      if (expr is UnaryOpExpr un) {
+        if (un.Op == UnaryOpExpr.Opcode.Cardinality) {
+          if (un.E.Type.IsQubitsType) {
+            Console.WriteLine("A Cardinality Operator on a value of Qubits type: {0}",
+                              Printer.ExprToString(expr));
+            expr = new ExprDotName(un.E.tok, un.E, "card", null);
+          }
+        }
+      }
+    }
+  }
+  class QSubstCloner : Cloner {
+    public readonly string OldName;
+    public readonly string NewName;
+    public readonly IToken NewTok;
+    public QSubstCloner(String oldName, String newName) {
+      OldName = oldName;
+      NewName = newName;
+      NewTok = new Token();
+      NewTok.val = newName;
+      /* Console.WriteLine("New Name: {0}, Old Name: {1}", newName, oldName); */
+    }
+
+    public override Expression CloneExpr(Expression expr) {
+      if (expr is NameSegment n) {
+        /* Console.WriteLine("NameDetected: {0}", n.Name); */
+        if (n.Name == OldName) {
+          return new NameSegment(NewTok, NewName, null);
+        }
+      }
+      return base.CloneExpr(expr);
+    }
+  }
+
+  class QRewriteFactory {
+    static public QRewriteFactory qrf = new QRewriteFactory();
+
+    static Dictionary<string, int> freshMap = new Dictionary<string, int>();
+
+    public IToken freshVariable(string name) {
+      var t = new Token();
+      if (! freshMap.ContainsKey(name)) {
+        freshMap.Add(name, 0);
+      }
+      t.val = name + freshMap[name].ToString();
+      freshMap[name] ++;
+      return t;
+    }
+
+    // Take a token and return a statement that declares it as a qreg
+    public Statement CreateLocalVar(IToken t) {
+      return CreateLocalVar(t, new UserDefinedType(t, "Qubits", null));
+    }
+    public Statement CreateLocalVar(IToken t, Type ty) {
+      return VarDeclStmt.CreateLocalVariable(
+        t, t.val, ty);
+    }
+
+    // Create a dummy qubit (nor 0 0) and assign it to the expression [e] given
+    public Statement MakeDummyAssignment(IToken x, IToken endTok, Expression e) {
+      var initExpr = new ExprDotName(x, new NameSegment(x, "Qubits", null), "PrepareAny", null);
+      var initRhs =
+        new TypeRhs(x, new UserDefinedType(Token.NoToken, initExpr),
+                    new List<ActualBinding>() {
+                      new ActualBinding(null, new LiteralExpr(null, 0)),
+                        new ActualBinding(null, new SeqDisplayExpr(x, new List<Expression>()))});
+      var init = new UpdateStmt(x, endTok, new List<Expression>(){ e },
+                                new List<AssignmentRhs>(){ initRhs });
+      return init;
+    }
+    public IToken UnderscoreToken(IToken t) {
+      var tok = new Token();
+      tok.val = "_" + t.val;
+      return tok;
+    }
+
+    public Expression ToExpression(IToken t) {
+      return new NameSegment(t, t.val, null);
+    }
+
+    public IToken UnderscoreToken(String s) {
+      var tok = new Token();
+      tok.val = "_" + s;
+      return tok;
+    }
+    public Statement Assign(IToken t, IToken endTok, Expression lhs, Expression rhs) {
+      return new UpdateStmt(
+        t, endTok,
+        new List<Expression>(){ lhs },
+        new List<AssignmentRhs>() { new ExprRhs(rhs) });
+    }
+
+    public Statement QUpdate(IToken t, IToken endTok, Expression qbit, Expression rhs) {
+      return new UpdateStmt(t, endTok, new ExprRhs(rhs), qbit);
+    }
+
+    public Expression DotCall(IToken x, Expression e, String name) {
+      return new ApplySuffix(
+        x, null, new ExprDotName(x, e, name, null),
+        new List<ActualBinding>() {});
+    }
+    public Expression DotCall(IToken x, Expression e, String name, List<Expression> es) {
+      var bindings = es.ConvertAll(e => new ActualBinding(null, e));
+      return new ApplySuffix(
+        x, null, new ExprDotName(x, e, name, null), bindings);
+    }
+  }
+
   class PluginRewriter : IRewriter {
     private Plugins.Rewriter internalRewriter;
 
@@ -2069,3 +2259,5 @@ namespace Microsoft.Dafny {
     }
   }
 }
+
+

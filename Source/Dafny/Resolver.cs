@@ -241,6 +241,7 @@ namespace Microsoft.Dafny {
     private ModuleSignature systemNameInfo = null;
     private bool useCompileSignatures = false;
 
+    private QRewriter qrewriter;
     private List<IRewriter> rewriters;
     private RefinementTransformer refinementTransformer;
 
@@ -445,6 +446,9 @@ namespace Microsoft.Dafny {
 
       rewriters.Add(new InductionRewriter(reporter));
       rewriters.Add(new PrintEffectEnforcement(reporter));
+
+      qrewriter = new QRewriter(reporter);
+      rewriters.Add(qrewriter);
 
       foreach (var plugin in DafnyOptions.O.Plugins) {
         rewriters.AddRange(plugin.GetRewriters(reporter));
@@ -5153,7 +5157,14 @@ namespace Microsoft.Dafny {
             satisfied = t.IsBoolType || t.IsBitVectorType;
             break;
           case "Sizeable":
-            satisfied = (t is SetType && ((SetType)t).Finite) || t is MultiSetType || t is SeqType || (t is MapType && ((MapType)t).Finite);
+            // Console.WriteLine("==========");
+            // Console.WriteLine(t.TypeName(null));
+            // Console.WriteLine(((Object) t));
+            // if (t is UserDefinedType)
+            //   Console.WriteLine(((UserDefinedType) t).Name);
+            // Console.WriteLine("==========");
+
+            satisfied = (t is SetType && ((SetType)t).Finite) || t is MultiSetType || t is SeqType || (t is MapType && ((MapType)t).Finite) || (t.IsQubitsType);
             break;
           case "Disjointable":
             satisfied = t is SetType || t is MultiSetType;
@@ -5173,7 +5184,8 @@ namespace Microsoft.Dafny {
             break;
           case "Indexable":
             if (!(t is TypeProxy)) {
-              satisfied = t is SeqType || t is MultiSetType || t is MapType || (t.IsArrayType && t.AsArrayType.Dims == 1);
+              // satisfied = t is SeqType || t is MultiSetType || t is MapType || (t.IsArrayType && t.AsArrayType.Dims == 1);
+              satisfied = t is SeqType || t is MultiSetType || t is MapType || (t.IsArrayType && t.AsArrayType.Dims == 1) || t.IsQubitsType;
             } else {
               // t is a proxy, but perhaps it stands for something between "object" and "array<?>".  If so, we can add a constraint
               // that it does have the form "array<?>", since "object" would not be Indexable.
@@ -5219,6 +5231,9 @@ namespace Microsoft.Dafny {
                 var u = Types[1];  // note, it's okay if "u" is a TypeProxy
                 resolver.AddXConstraint(this.tok, "Equatable", elementType, u, new TypeConstraint.ErrorMsgWithBase(errorMsg, "expecting element type to be assignable to {1} (got {0})", u, elementType));
                 moreXConstraints = true;
+                return true;
+              }
+              if (t.IsQubitsType) {
                 return true;
               }
               if (t is TypeProxy) {
@@ -14931,6 +14946,13 @@ namespace Microsoft.Dafny {
             break;
           case UnaryOpExpr.Opcode.Cardinality:
             AddXConstraint(expr.tok, "Sizeable", e.E.Type, "size operator expects a collection argument (instead got {0})");
+            // if (e.E.Type.IsQubitsType) {
+            //   var resolved = new ExprDotName(e.E.tok, e.E, "card", null);
+            //   ResolveExpression(resolved, opts);
+            //   Console.WriteLine("Resolved : {0}", resolved);
+            //   Console.WriteLine("Resolved.R : {0}", resolved.ResolvedExpression);
+            //   e.ResolvedExpression = resolved;
+            // }
             expr.Type = Type.Int;
             break;
           case UnaryOpExpr.Opcode.Allocated:
@@ -15349,6 +15371,14 @@ namespace Microsoft.Dafny {
           // i.e. no error was thrown during compiling of the NextedMatchExpr or during resolution of the ResolvedExpression
           expr.Type = e.ResolvedExpression.Type;
         }
+      } else if (expr is QJudgementExpression) {
+        var e = (QJudgementExpression)expr;
+        // first pass : rough resolution
+        ResolveExpression(e.En, opts);
+        ResolveExpression(e.Ebody, opts);
+        // second pass : rewrite and refine the semi-resovled expression
+        qrewriter.RewriteQ(e);
+        ResolveExpression(e.ResolvedExpression, opts);
       } else {
         Contract.Assert(false); throw new cce.UnreachableException();  // unexpected expression
       }
